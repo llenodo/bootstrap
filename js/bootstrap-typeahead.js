@@ -28,14 +28,16 @@
 
   var Typeahead = function (element, options) {
     this.$element = $(element)
-    this.options = $.extend({}, $.fn.typeahead.defaults, options)
+    this.options = $.extend(true, {}, $.fn.typeahead.defaults, options) //deep copy so ajaxData.data gets copied in
     this.matcher = this.options.matcher || this.matcher
     this.sorter = this.options.sorter || this.sorter
     this.highlighter = this.options.highlighter || this.highlighter
     this.updater = this.options.updater || this.updater
     this.$menu = $(this.options.menu).appendTo('body')
     this.source = this.options.source
+    this.ajaxData = this.options.ajaxData || {},
     this.shown = false
+    this.objectPropertyKey = this.options.objectPropertyKey
     this.listen()
   }
 
@@ -44,15 +46,16 @@
     constructor: Typeahead
 
   , select: function () {
-      var val = this.$menu.find('.active').attr('data-value')
+      var item = this.$menu.find('.active').data('value')
       this.$element
-        .val(this.updater(val))
-        .change()
+          .val(this.updater(item))
+          .trigger('change', item) //pass the item to the change event so you can use it
       return this.hide()
     }
 
   , updater: function (item) {
-      return item
+      //extract the item if it's an object, otherwise it's a string so just use that
+      return this.objectPropertyKey ? item[this.objectPropertyKey] : item
     }
 
   , show: function () {
@@ -76,12 +79,32 @@
       return this
     }
 
+  , populateSource: function () {
+      var that = this
+
+      this.query = this.$element.val()
+
+      if (this.query.length < this.ajaxData.numCharsTriggerDelay)
+          return
+
+      //set the query parameter name the server expects
+      this.ajaxData.data[this.ajaxData.queryPropertyKey] = this.query
+
+      $.ajax(this.ajaxData).success(function(data, status, xhr){
+          that.source = data
+          that.lookup()
+      })
+    }
+
   , lookup: function (event) {
       var that = this
         , items
         , q
 
-      this.query = this.$element.val()
+      //only need to do this if we're not doing ajax
+      if (!this.ajaxData.url) {
+        this.query = this.$element.val()
+      }
 
       if (!this.query) {
         return this.shown ? this.hide() : this
@@ -100,19 +123,26 @@
       return this.render(items.slice(0, this.options.items)).show()
     }
 
-  , matcher: function (item) {
-      return ~item.toLowerCase().indexOf(this.query.toLowerCase())
+  , matcher: function(item) {
+      //extract item from object if necessary
+      var itemToTestAgainst = this.objectPropertyKey ? item[this.objectPropertyKey] : item
+
+      return ~itemToTestAgainst.toLowerCase().indexOf(this.query.toLowerCase())
     }
 
-  , sorter: function (items) {
+  , sorter: function(items) {
       var beginswith = []
         , caseSensitive = []
         , caseInsensitive = []
         , item
+        , itemToTestAgainst
 
       while (item = items.shift()) {
-        if (!item.toLowerCase().indexOf(this.query.toLowerCase())) beginswith.push(item)
-        else if (~item.indexOf(this.query)) caseSensitive.push(item)
+        //extract item from object if necessary
+        itemToTestAgainst = this.objectPropertyKey ? item[this.objectPropertyKey] : item
+
+        if (!itemToTestAgainst.toLowerCase().indexOf(this.query.toLowerCase())) beginswith.push(item)
+        else if (~itemToTestAgainst.indexOf(this.query)) caseSensitive.push(item)
         else caseInsensitive.push(item)
       }
 
@@ -120,8 +150,11 @@
     }
 
   , highlighter: function (item) {
-      var query = this.query.replace(/[\-\[\]{}()*+?.,\\\^$|#\s]/g, '\\$&')
-      return item.replace(new RegExp('(' + query + ')', 'ig'), function ($1, match) {
+      var query = this.query.replace(/[\-\[\]{}()*+?.,\\\^$|#\s]/g, '\\$&'),
+          //extract item from object if necessary
+          ret = this.objectPropertyKey ? item[this.objectPropertyKey] : item
+
+      return ret.replace(new RegExp('(' + query + ')', 'ig'), function ($1, match) {
         return '<strong>' + match + '</strong>'
       })
     }
@@ -130,7 +163,7 @@
       var that = this
 
       items = $(items).map(function (i, item) {
-        i = $(that.options.item).attr('data-value', item)
+        i = $(that.options.item).data('value', item) //use data instead of attr to store objects if you want to
         i.find('a').html(that.highlighter(item))
         return i[0]
       })
@@ -195,7 +228,8 @@
           break
 
         default:
-          this.lookup()
+          if (this.ajaxData.url) this.populateSource() //calls lookup after request finishes
+          else this.lookup()
       }
 
       e.stopPropagation()
@@ -265,6 +299,11 @@
   , items: 8
   , menu: '<ul class="typeahead dropdown-menu"></ul>'
   , item: '<li><a href="#"></a></li>'
+  , ajaxData: {
+      numCharsTriggerDelay: 3,
+      queryPropertyKey: 'propertyKey',
+      data: {}
+    }
   }
 
   $.fn.typeahead.Constructor = Typeahead
